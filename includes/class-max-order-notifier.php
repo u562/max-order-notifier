@@ -37,28 +37,27 @@ class MAX_Order_Notifier {
         add_action('woocommerce_checkout_order_processed', array($this, 'send_order_notification'), 10, 3);
         add_action('woocommerce_order_status_changed', array($this, 'send_order_status_notification'), 10, 4);
         add_filter('woocommerce_integrations', array($this, 'add_integration'));
-        
-        // Добавляем тестовый хук для ручной проверки
         add_action('admin_post_max_test_notification', array($this, 'handle_test_notification'));
     }
     
-    private function init_settings() {
-        $this->max_bot_token = get_option('max_order_notifier_bot_token', '');
-        $this->max_chat_id = get_option('max_order_notifier_chat_id', '');
-        $this->order_statuses = get_option('max_order_notifier_statuses', array('processing', 'completed'));
-    }
+
+private function init_settings() {
+    $settings = get_option('woocommerce_max_order_notifier_settings', array());
+    
+    $this->log('Debug settings: ' . print_r($settings, true)); // ← временная отладка
+    
+    $this->max_bot_token = isset($settings['max_bot_token']) ? $settings['max_bot_token'] : '';
+    $this->max_chat_id = isset($settings['max_chat_id']) ? $settings['max_chat_id'] : '';
+    $this->order_statuses = get_option('max_order_notifier_statuses', array('processing', 'completed'));
+}	
     
     private function log($message, $level = 'info') {
         if ($this->log_enabled !== 'yes') {
             return;
         }
         
-        $log_message = '[MAX Order Notifier] ' . $message;
+        error_log('[MAX Order Notifier] ' . $message);
         
-        // Записываем в error_log WordPress
-        error_log($log_message);
-        
-        // Записываем в WooCommerce логгер
         if (isset($this->log) && function_exists('wc_get_logger')) {
             $this->log->log($level, $message, array('source' => 'max-order-notifier'));
         }
@@ -75,10 +74,8 @@ class MAX_Order_Notifier {
         
         $order_status = $order->get_status();
         $this->log("Статус заказа #{$order_id}: {$order_status}");
-        $this->log("Отслеживаемые статусы: " . print_r($this->order_statuses, true));
         
         if (in_array($order_status, $this->order_statuses)) {
-            $this->log("Статус соответствует условиям, отправляем уведомление");
             $message = $this->format_order_message($order);
             $this->send_to_max($message, $order_id);
         } else {
@@ -87,14 +84,11 @@ class MAX_Order_Notifier {
     }
     
     public function send_order_status_notification($order_id, $old_status, $new_status, $order) {
-        $this->log("Хук woocommerce_order_status_changed сработал: заказ #{$order_id}, статус изменен с {$old_status} на {$new_status}");
+        $this->log("Хук woocommerce_order_status_changed: заказ #{$order_id}, {$old_status} → {$new_status}");
         
         if (in_array($new_status, $this->order_statuses)) {
-            $this->log("Новый статус в списке отслеживаемых, отправляем уведомление");
             $message = $this->format_status_message($order, $old_status, $new_status);
             $this->send_to_max($message, $order_id);
-        } else {
-            $this->log("Новый статус {$new_status} не в списке отслеживаемых, пропускаем");
         }
     }
     
@@ -129,7 +123,9 @@ class MAX_Order_Notifier {
             $message .= "🏠 **Адрес доставки:**\n" . $billing_address . "\n";
         }
         
-        $this->log("Сформировано сообщение для заказа #{$order->get_order_number()}, длина: " . strlen($message));
+        // Добавляем ссылку на заказ в админке
+        $admin_url = admin_url('post.php?post=' . $order->get_id() . '&action=edit');
+        $message .= "🔗 [Перейти к заказу в админке]($admin_url)";
         
         return $message;
     }
@@ -143,6 +139,10 @@ class MAX_Order_Notifier {
         $message .= "📊 Изменение: {$old_label} → {$new_label}\n";
         $message .= "💰 Сумма: " . strip_tags(wc_price($order->get_total())) . "\n";
         $message .= "👤 Клиент: {$order->get_billing_first_name()} {$order->get_billing_last_name()}\n";
+        $message .= "📞 Телефон: {$order->get_billing_phone()}\n\n";
+        
+        $admin_url = admin_url('post.php?post=' . $order->get_id() . '&action=edit');
+        $message .= "🔗 [Перейти к заказу]($admin_url)";
         
         return $message;
     }
@@ -151,7 +151,7 @@ class MAX_Order_Notifier {
         $log_prefix = $order_id ? "[Заказ #{$order_id}] " : "[Тест] ";
         
         $this->log($log_prefix . "Начинаем отправку в MAX");
-        $this->log($log_prefix . "Bot token: " . ($this->max_bot_token ? substr($this->max_bot_token, 0, 10) . '...' : 'НЕ ЗАДАН'));
+        $this->log($log_prefix . "Bot token: " . ($this->max_bot_token ? substr($this->max_bot_token, 0, 20) . '...' : 'НЕ ЗАДАН'));
         $this->log($log_prefix . "Chat ID: " . ($this->max_chat_id ?: 'НЕ ЗАДАН'));
         
         if (empty($this->max_bot_token) || empty($this->max_chat_id)) {
@@ -159,66 +159,55 @@ class MAX_Order_Notifier {
             return false;
         }
         
-        // Пробуем разные возможные эндпоинты MAX API
-        $endpoints = array(
-            'https://api.max.ru/bot/' . $this->max_bot_token . '/sendMessage',
-            'https://api.max.ru/v1/messages/send',
-            'https://max.ru/api/send',
-        );
+        // Правильный URL API MAX из рабочего скрипта
+        $url = "https://platform-api.max.ru/messages?chat_id=" . (int)$this->max_chat_id;
         
-        $success = false;
-        $last_error = '';
+        $this->log($log_prefix . "URL запроса: " . $url);
         
-        foreach ($endpoints as $endpoint) {
-            $this->log($log_prefix . "Пробуем эндпоинт: " . $endpoint);
-            
-            $payload = array(
-                'chat_id' => $this->max_chat_id,
+        // Инициализируем cURL
+        $ch = curl_init($url);
+        
+        // Настраиваем параметры cURL
+        curl_setopt_array($ch, [
+            CURLOPT_HTTPHEADER => [
+                "Authorization: {$this->max_bot_token}",
+                "Content-Type: application/json"
+            ],
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode([
                 'text' => $message,
-                'parse_mode' => 'Markdown'
-            );
-            
-            $response = wp_remote_post($endpoint, array(
-                'timeout' => 15,
-                'headers' => array(
-                    'Content-Type' => 'application/json',
-                ),
-                'body' => json_encode($payload)
-            ));
-            
-            $this->log($log_prefix . "Ответ получен");
-            
-            if (is_wp_error($response)) {
-                $error_msg = $response->get_error_message();
-                $this->log($log_prefix . "WP_Error: " . $error_msg, 'error');
-                $last_error = $error_msg;
-                continue;
-            }
-            
-            $status_code = wp_remote_retrieve_response_code($response);
-            $body = wp_remote_retrieve_body($response);
-            
-            $this->log($log_prefix . "HTTP статус: " . $status_code);
-            $this->log($log_prefix . "Тело ответа: " . $body);
-            
-            if ($status_code >= 200 && $status_code < 300) {
-                $this->log($log_prefix . "УСПЕХ! Сообщение отправлено через эндпоинт: " . $endpoint);
-                $success = true;
-                break;
-            } else {
-                $this->log($log_prefix . "Ошибка HTTP {$status_code}: {$body}", 'error');
-                $last_error = "HTTP {$status_code}: {$body}";
-            }
+                'format' => 'markdown'
+            ]),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 10,
+            CURLOPT_SSL_VERIFYPEER => false, // Для тестирования
+        ]);
+        
+        // Выполняем запрос
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        
+        curl_close($ch);
+        
+        $this->log($log_prefix . "HTTP код: " . $httpCode);
+        
+        if ($error) {
+            $this->log($log_prefix . "Ошибка cURL: " . $error, 'error');
         }
         
-        if (!$success) {
-            $this->log($log_prefix . "ВСЕ ПОПЫТКИ ОТПРАВКИ НЕ УДАЛИСЬ. Последняя ошибка: {$last_error}", 'error');
-            
-            // Сохраняем неудачную попытку в отдельную таблицу
-            $this->save_failed_attempt($order_id, $message, $last_error);
+        if ($response) {
+            $this->log($log_prefix . "Ответ сервера: " . $response);
         }
         
-        return $success;
+        if ($httpCode >= 200 && $httpCode < 300) {
+            $this->log($log_prefix . "✅ Сообщение успешно отправлено в MAX!");
+            return true;
+        } else {
+            $this->log($log_prefix . "❌ Ошибка отправки. HTTP код: {$httpCode}", 'error');
+            $this->save_failed_attempt($order_id, $message, "HTTP {$httpCode}: {$response}");
+            return false;
+        }
     }
     
     private function save_failed_attempt($order_id, $message, $error) {
@@ -256,13 +245,17 @@ class MAX_Order_Notifier {
             wp_die('Unauthorized');
         }
         
-        $test_message = "🧪 Тестовое сообщение от MAX Order Notifier\nВремя: " . current_time('mysql');
+        $test_message = "🧪 **Тестовое сообщение от MAX Order Notifier**\n\n";
+        $test_message .= "✅ Плагин успешно подключен к API MAX\n";
+        $test_message .= "🕐 Время: " . current_time('mysql') . "\n";
+        $test_message .= "🔗 WooCommerce интегрирован корректно";
+        
         $result = $this->send_to_max($test_message);
         
         if ($result) {
-            add_settings_error('max_order_notifier', 'test_success', 'Тестовое сообщение отправлено!', 'success');
+            add_settings_error('max_order_notifier', 'test_success', '✅ Тестовое сообщение успешно отправлено в MAX!', 'success');
         } else {
-            add_settings_error('max_order_notifier', 'test_error', 'Ошибка отправки. Проверьте логи.', 'error');
+            add_settings_error('max_order_notifier', 'test_error', '❌ Ошибка отправки. Проверьте логи.', 'error');
         }
         
         wp_redirect(wp_get_referer());
@@ -291,25 +284,24 @@ if (!class_exists('MAX_Order_Notifier_Integration')) {
         }
         
         public function init_form_fields() {
-            $logs_url = '';
-            if (function_exists('wc_get_log_file_path')) {
-                $logs_url = admin_url('admin.php?page=wc-status&tab=logs');
-            }
+            $logs_url = admin_url('admin.php?page=wc-status&tab=logs');
             
             $this->form_fields = array(
                 'max_bot_token' => array(
                     'title' => __('MAX Bot Token', 'max-order-notifier'),
                     'type' => 'text',
-                    'description' => __('Токен вашего MAX бота', 'max-order-notifier'),
+                    'description' => __('Токен бота в формате app:xxx или другой (как в рабочем скрипте)', 'max-order-notifier'),
                     'desc_tip' => true,
-                    'default' => ''
+                    'default' => '',
+                    'placeholder' => 'tLqINlA3kJc8s1euYgChr1owvjP2Z1S_Z3DgLO9fr5cMz5ic'
                 ),
                 'max_chat_id' => array(
                     'title' => __('MAX Chat ID', 'max-order-notifier'),
                     'type' => 'text',
-                    'description' => __('ID чата для отправки уведомлений', 'max-order-notifier'),
+                    'description' => __('ID чата или канала (отрицательное число для канала)', 'max-order-notifier'),
                     'desc_tip' => true,
-                    'default' => ''
+                    'default' => '',
+                    'placeholder' => '-73583470536035'
                 ),
                 'order_statuses' => array(
                     'title' => __('Статусы заказов для уведомлений', 'max-order-notifier'),
@@ -324,7 +316,7 @@ if (!class_exists('MAX_Order_Notifier_Integration')) {
                     'title' => __('Включить логирование', 'max-order-notifier'),
                     'type' => 'checkbox',
                     'label' => __('Записывать события и ошибки в лог', 'max-order-notifier'),
-                    'description' => $logs_url ? sprintf(__('<a href="%s">Просмотреть логи</a>', 'max-order-notifier'), $logs_url) : '',
+                    'description' => sprintf(__('<a href="%s">Просмотреть логи WooCommerce</a>', 'max-order-notifier'), $logs_url),
                     'default' => 'yes'
                 ),
                 'test_section' => array(
@@ -333,9 +325,9 @@ if (!class_exists('MAX_Order_Notifier_Integration')) {
                     'description' => __('Отправьте тестовое сообщение для проверки настроек', 'max-order-notifier')
                 ),
                 'test_button' => array(
-                    'title' => __('Тестовое сообщение', 'max-order-notifier'),
+                    'title' => __('Отправить тест', 'max-order-notifier'),
                     'type' => 'button',
-                    'description' => __('Нажмите для отправки тестового уведомления', 'max-order-notifier'),
+                    'description' => __('Нажмите для отправки тестового уведомления в MAX', 'max-order-notifier'),
                     'class' => 'button-secondary'
                 )
             );
@@ -351,15 +343,15 @@ if (!class_exists('MAX_Order_Notifier_Integration')) {
         
         private function send_test_message() {
             $notifier = MAX_Order_Notifier::get_instance();
-            $result = $notifier->send_to_max('🧪 Тестовое сообщение от MAX Order Notifier для WooCommerce');
+            $result = $notifier->send_to_max('🧪 Тестовое сообщение от MAX Order Notifier');
             
             if ($result) {
                 add_action('admin_notices', function() {
-                    echo '<div class="notice notice-success"><p>✅ Тестовое сообщение успешно отправлено!</p></div>';
+                    echo '<div class="notice notice-success is-dismissible"><p>✅ Тестовое сообщение успешно отправлено в MAX!</p></div>';
                 });
             } else {
                 add_action('admin_notices', function() {
-                    echo '<div class="notice notice-error"><p>❌ Ошибка отправки тестового сообщения. Проверьте логи.</p></div>';
+                    echo '<div class="notice notice-error is-dismissible"><p>❌ Ошибка отправки тестового сообщения. Проверьте настройки токена и Chat ID.</p></div>';
                 });
             }
         }
