@@ -8,7 +8,6 @@
  * License: GPL v2 or later
  * Text Domain: max-order-notifier
  * Domain Path: /languages
- * Requires Plugins: woocommerce
  */
 
 // Защита от прямого доступа
