@@ -1,10 +1,10 @@
 <?php
 /**
  * Plugin Name: MAX Order Notifier for WooCommerce
- * Plugin URI: https://max.ru/
+ * Plugin URI: https://orenpro.ru/
  * Description: Отправляет уведомления о новых заказах WooCommerce в чат мессенджера MAX
  * Version: 1.0.0
- * Author: Your Name
+ * Author: ORENPRO
  * License: GPL v2 or later
  * Text Domain: max-order-notifier
  * Domain Path: /languages
