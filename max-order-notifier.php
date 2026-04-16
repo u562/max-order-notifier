@@ -3,8 +3,8 @@
  * Plugin Name: MAX Order Notifier for WooCommerce
  * Plugin URI: https://orenpro.ru/
  * Description: Отправляет уведомления о новых заказах WooCommerce в чат мессенджера MAX
- * Version: 1.0.0
- * Author: ORENPRO
+ * Version: 1.0.7
+ * Author: orenpro
  * License: GPL v2 or later
  * Text Domain: max-order-notifier
  * Domain Path: /languages
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Определяем константы плагина
-define('MAX_ORDER_NOTIFIER_VERSION', '1.0.0');
+define('MAX_ORDER_NOTIFIER_VERSION', '1.0.1');
 define('MAX_ORDER_NOTIFIER_PATH', plugin_dir_path(__FILE__));
 define('MAX_ORDER_NOTIFIER_URL', plugin_dir_url(__FILE__));
 
@@ -43,8 +43,25 @@ function max_order_notifier_init() {
         return;
     }
     
-    require_once MAX_ORDER_NOTIFIER_PATH . 'includes/class-max-order-notifier.php';
-    MAX_Order_Notifier::get_instance();
+    // Правильный путь к файлу класса
+    $class_file = MAX_ORDER_NOTIFIER_PATH . 'includes/class-max-order-notifier.php';
+    
+    if (file_exists($class_file)) {
+        require_once $class_file;
+        if (class_exists('MAX_Order_Notifier')) {
+            MAX_Order_Notifier::get_instance();
+        }
+    } else {
+        // Если файл не найден, показываем ошибку
+        add_action('admin_notices', function() use ($class_file) {
+            ?>
+            <div class="notice notice-error">
+                <p><strong>MAX Order Notifier Error:</strong> Required file not found: <?php echo esc_html($class_file); ?></p>
+                <p>Please reinstall the plugin or check file permissions.</p>
+            </div>
+            <?php
+        });
+    }
 }
 
 // Добавляем ссылку на настройки в список плагинов
@@ -56,3 +73,10 @@ function max_order_notifier_action_links($links) {
     array_unshift($links, $settings_link);
     return $links;
 }
+
+// Регистрируем интеграцию при активации WooCommerce
+add_action('before_woocommerce_init', function() {
+    if (class_exists('WooCommerce')) {
+        require_once MAX_ORDER_NOTIFIER_PATH . 'includes/class-max-order-notifier.php';
+    }
+});
