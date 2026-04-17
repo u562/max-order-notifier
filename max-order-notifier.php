@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Определяем константы плагина
-define('MAX_ORDER_NOTIFIER_VERSION', '1.0.1');
+define('MAX_ORDER_NOTIFIER_VERSION', '1.0.7');
 define('MAX_ORDER_NOTIFIER_PATH', plugin_dir_path(__FILE__));
 define('MAX_ORDER_NOTIFIER_URL', plugin_dir_url(__FILE__));
 
